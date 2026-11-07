@@ -10,6 +10,7 @@
 	import { saveOnCmdS } from '$lib/save-shortcut';
 	import { createAsyncFlag } from '$lib/async-action.svelte';
 	import { t, tr } from '$lib/i18n';
+	import EnvManagedNotice from '$lib/components/env-managed-notice.svelte';
 
 	const loadingFlag = createAsyncFlag(true);
 	const savingFlag = createAsyncFlag();
@@ -38,6 +39,21 @@
 	let showManualWebhook = $state(false);
 
 	let userEmail = $state('');
+
+	// Environment variables outrank these stored settings (see the notice in the markup),
+	// so collect the ones currently doing so. Transport is one group: setting either
+	// EMAIL_SMTP_HOST or EMAIL_RESEND_API_KEY hands the server the whole connection, which
+	// is what lets the environment pick SMTP over Resend at all.
+	const envVars = $derived.by(() => {
+		const e = emailSettings?.env;
+		if (!e) return [];
+		const vars: string[] = [];
+		if (e.smtp_host) vars.push('EMAIL_SMTP_HOST');
+		if (e.resend_api_key_set) vars.push('EMAIL_RESEND_API_KEY');
+		if (e.email_from) vars.push('EMAIL_FROM_ADDRESS');
+		if (e.email_from_name) vars.push('EMAIL_FROM_NAME');
+		return vars;
+	});
 
 	// The server decides the transport; mirror its answer rather than re-deriving it here,
 	// so the page can never claim one path while another is delivering.
@@ -151,7 +167,10 @@
 {#if loadingFlag.active}
 	<p class="py-8 text-sm text-muted-foreground">{$t('common.loading')}</p>
 {:else}
-	<div class="max-w-lg">
+	<div class="max-w-lg space-y-4">
+		{#if envVars.length > 0}
+			<EnvManagedNotice vars={envVars} value={emailSettings?.env.smtp_host ?? ''} />
+		{/if}
 		<div class="rounded-lg border bg-card p-6">
 			<div class="mb-4 flex items-start justify-between gap-2">
 				<div>

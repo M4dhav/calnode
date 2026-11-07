@@ -109,32 +109,48 @@ func BuildHandler(ctx context.Context, cfg *config.Config, db *sql.DB, logger *s
 	// reference, so changing SMTP settings in the UI takes effect immediately.
 	live := mailer.NewLive(&mailer.Noop{})
 
-	// DB settings take priority over env vars — they're what the UI controls.
+	// Environment settings outrank the server_settings row; the row is the fallback.
+	// handler.EnvSettings documents the rule and why some fields resolve as a group.
+	// Recorded on the handler too, so the settings-save path and the test-send resolve
+	// the same way this does and cannot drift back to database-only.
+	env := handler.EnvSettings{
+		SMTPHost: cfg.SMTPHost, SMTPPort: cfg.SMTPPort,
+		SMTPUser: cfg.SMTPUser, SMTPPass: cfg.SMTPPass,
+		SMTPTLS: cfg.SMTPTLS, SMTPStartTLS: cfg.SMTPStartTLS,
+		ResendAPIKey:  cfg.ResendAPIKey,
+		EmailFrom:     cfg.EmailFrom,
+		EmailFromName: cfg.EmailFromName,
+
+		GoogleClientID:     cfg.GoogleClientID,
+		GoogleClientSecret: cfg.GoogleClientSecret,
+
+		ZoomClientID:     cfg.ZoomClientID,
+		ZoomClientSecret: cfg.ZoomClientSecret,
+	}
+	h.SetEnvSettings(env)
+
 	dbSMTP, dbErr := handler.LoadEmailSettingsFromDB(db, encKey)
 	if dbErr != nil {
+		// Not fatal, and deliberately not a reason to stop: an environment configuration
+		// that works must not be masked by a stored row that cannot be read.
 		logger.Warn("mailer: could not load settings from database", "error", dbErr)
 	}
 
-	switch {
-	case dbSMTP != nil:
+	if smtp := handler.MergeEmailSettings(env, dbSMTP); smtp != nil {
 		// BuildMailer, not NewSMTP directly, so boot and the settings-save path pick the
 		// transport by the same rule. A Resend API key here means HTTPS delivery.
-		m, transport := h.BuildMailer(*dbSMTP)
+		m, transport := h.BuildMailer(*smtp)
 		live.Swap(m)
-		logger.Info("mailer: configured from database",
-			"transport", string(transport), "host", dbSMTP.Host, "port", dbSMTP.Port)
-
-	case cfg.SMTPHost != "":
-		m, _ := h.BuildMailer(handler.SMTPConfig{
-			Host: cfg.SMTPHost, Port: cfg.SMTPPort, User: cfg.SMTPUser, Pass: cfg.SMTPPass,
-			TLS: cfg.SMTPTLS, StartTLS: cfg.SMTPStartTLS, From: cfg.EmailFrom, FromName: cfg.EmailFromName,
-		})
-		live.Swap(m)
-		logger.Info("mailer: configured from environment", "host", cfg.SMTPHost, "port", cfg.SMTPPort)
-		// Seed env-var settings into DB so they appear in the UI on first boot.
-		seedSMTPToDB(db, cfg, encKey, logger)
-
-	default:
+		logger.Info("mailer: configured", "source", settingSource(env.EmailTransportFromEnv()),
+			"transport", string(transport), "host", smtp.Host, "port", smtp.Port)
+		// Say so out loud when the environment is overriding a stored value. Silence here
+		// is what made the old precedence so hard to diagnose: the admin page went on
+		// showing settings that were not the ones delivering mail.
+		if env.EmailTransportFromEnv() && dbSMTP != nil {
+			logger.Warn("mailer: EMAIL_SMTP_HOST/EMAIL_RESEND_API_KEY is set, so Settings → Email is ignored",
+				"env_host", env.SMTPHost, "ignored_stored_host", dbSMTP.Host)
+		}
+	} else {
 		logger.Info("mailer: not configured — configure SMTP in Settings or set EMAIL_SMTP_HOST")
 	}
 
@@ -162,15 +178,29 @@ func BuildHandler(ctx context.Context, cfg *config.Config, db *sql.DB, logger *s
 		logger.Info("webhook worker started")
 	}
 
-	// DB Google settings take priority over env vars.
-	googleClientID := cfg.GoogleClientID
-	googleClientSecret := cfg.GoogleClientSecret
-	if dbGoogle, dbGoogleErr := handler.LoadGoogleSettingsFromDB(db, encKey); dbGoogleErr != nil {
+	// GOOGLE_CLIENT_ID outranks the stored app; the stored app is the fallback. The ID and
+	// the secret resolve together, so an environment ID is never paired with a stored
+	// secret from a different app -- that combination fails at Google's consent screen,
+	// long after boot, with nothing here to explain it.
+	var googleClientID, googleClientSecret string
+	dbGoogle, dbGoogleErr := handler.LoadGoogleSettingsFromDB(db, encKey)
+	if dbGoogleErr != nil {
 		logger.Warn("google settings: could not load from database", "error", dbGoogleErr)
-	} else if dbGoogle != nil {
-		googleClientID = dbGoogle.ClientID
-		googleClientSecret = dbGoogle.ClientSecret
-		logger.Info("Google OAuth: credentials loaded from database")
+	}
+	if g := handler.MergeGoogleSettings(env, dbGoogle); g != nil {
+		googleClientID, googleClientSecret = g.ClientID, g.ClientSecret
+		logger.Info("Google OAuth: credentials loaded", "source", settingSource(env.GoogleClientID != ""))
+		// Half a pair is a misconfiguration worth naming now. Because the ID and secret
+		// travel together, an ID on its own does NOT borrow the stored secret -- it
+		// yields an app with no secret, which fails at the provider, not here.
+		if env.GoogleClientID != "" && env.GoogleClientSecret == "" {
+			logger.Warn("google settings: GOOGLE_CLIENT_ID is set without GOOGLE_CLIENT_SECRET; " +
+				"the pair travels together, so the stored secret is not used")
+		}
+		if env.GoogleClientID != "" && dbGoogle != nil {
+			logger.Warn("google settings: GOOGLE_CLIENT_ID is set, so Settings → Google OAuth is ignored",
+				"env_client_id", env.GoogleClientID, "ignored_stored_client_id", dbGoogle.ClientID)
+		}
 	}
 
 	// Build one calendar Service and register every configured provider into it.
@@ -233,16 +263,28 @@ func BuildHandler(ctx context.Context, cfg *config.Config, db *sql.DB, logger *s
 		logger.Info("LLM layer not enabled — configure it in Settings → AI")
 	}
 
-	// Optional Zoom integration — each host connects their own Zoom account to
-	// auto-mint meeting links. DB settings take priority over env vars.
-	zoomClientID := cfg.ZoomClientID
-	zoomClientSecret := cfg.ZoomClientSecret
-	if dbZoom, dbZoomErr := handler.LoadZoomSettingsFromDB(db, encKey); dbZoomErr != nil {
+	// Optional Zoom integration — each host connects their own Zoom account to auto-mint
+	// meeting links. ZOOM_CLIENT_ID outranks the stored app, ID and secret together, on
+	// the same rule as Google above.
+	var zoomClientID, zoomClientSecret string
+	dbZoom, dbZoomErr := handler.LoadZoomSettingsFromDB(db, encKey)
+	if dbZoomErr != nil {
 		logger.Warn("zoom settings: could not load from database", "error", dbZoomErr)
-	} else if dbZoom != nil {
-		zoomClientID = dbZoom.ClientID
-		zoomClientSecret = dbZoom.ClientSecret
-		logger.Info("Zoom OAuth: credentials loaded from database")
+	}
+	if z := handler.MergeZoomSettings(env, dbZoom); z != nil {
+		zoomClientID, zoomClientSecret = z.ClientID, z.ClientSecret
+		logger.Info("Zoom OAuth: credentials loaded", "source", settingSource(env.ZoomClientID != ""))
+		// Half a pair is a misconfiguration worth naming now. Because the ID and secret
+		// travel together, an ID on its own does NOT borrow the stored secret -- it
+		// yields an app with no secret, which fails at the provider, not here.
+		if env.ZoomClientID != "" && env.ZoomClientSecret == "" {
+			logger.Warn("zoom settings: ZOOM_CLIENT_ID is set without ZOOM_CLIENT_SECRET; " +
+				"the pair travels together, so the stored secret is not used")
+		}
+		if env.ZoomClientID != "" && dbZoom != nil {
+			logger.Warn("zoom settings: ZOOM_CLIENT_ID is set, so Settings → Zoom is ignored",
+				"env_client_id", env.ZoomClientID, "ignored_stored_client_id", dbZoom.ClientID)
+		}
 	}
 	if zoomClientID != "" && zoomClientSecret != "" {
 		zoomRedirect := cfg.BaseURL + "/v1/zoom/callback"
@@ -604,41 +646,12 @@ func New(ctx context.Context, cfg *config.Config, db *sql.DB, logger *slog.Logge
 	return TrustClientIP(trustedProxies)(RequestID(Logging(logger, Recover(logger, SameOriginCheck(mux))))), drain
 }
 
-// seedSMTPToDB writes env-var SMTP settings into the DB on first boot so they
-// appear in the UI. Uses WHERE smtp_host = ” to avoid a check-then-act race
-// and to never overwrite settings the user has already saved via the UI.
-func seedSMTPToDB(db *sql.DB, cfg *config.Config, encKey [32]byte, logger *slog.Logger) {
-	var passEnc string
-	if cfg.SMTPPass != "" {
-		enc, err := secret.Encrypt(encKey, cfg.SMTPPass)
-		if err != nil {
-			logger.Warn("mailer: seed — could not encrypt password", "error", err)
-			return
-		}
-		passEnc = enc
+// settingSource names where a resolved setting came from, for the boot log. The
+// environment outranks the stored row (see handler.EnvSettings), and an operator reading
+// the log after a redeploy needs to see which one actually took effect.
+func settingSource(fromEnv bool) string {
+	if fromEnv {
+		return "environment"
 	}
-
-	boolToInt := func(b bool) int {
-		if b {
-			return 1
-		}
-		return 0
-	}
-	res, err := db.Exec(`
-		UPDATE server_settings SET
-		  smtp_host = ?, smtp_port = ?, smtp_user = ?, smtp_pass_enc = ?,
-		  smtp_tls = ?, smtp_starttls = ?,
-		  email_from = ?, email_from_name = ?,
-		  updated_at = datetime('now')
-		WHERE id = 1 AND smtp_host = ''`,
-		cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPUser, passEnc,
-		boolToInt(cfg.SMTPTLS), boolToInt(cfg.SMTPStartTLS),
-		cfg.EmailFrom, cfg.EmailFromName)
-	if err != nil {
-		logger.Warn("mailer: seed to database failed", "error", err)
-		return
-	}
-	if n, _ := res.RowsAffected(); n > 0 {
-		logger.Info("mailer: seeded SMTP settings from env vars into database (env vars can now be removed)")
-	}
+	return "database"
 }

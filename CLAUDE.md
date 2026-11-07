@@ -206,6 +206,34 @@ The rule: a Resend API key selects HTTPS, else an SMTP host selects SMTP, else `
 - Adding a secret to email settings: use `storeEmailSecret`, and make the JSON field a
   **pointer** so "omitted" (keep) stays distinguishable from `""` (clear).
 
+## Settings that live in TWO places - env wins, the DB row is the fallback
+
+Email, Google OAuth and Zoom OAuth can each be set by env var **or** in the admin UI.
+`handler.EnvSettings` + `MergeEmailSettings`/`MergeGoogleSettings`/`MergeZoomSettings` are
+the single place that is resolved: **env var > stored row > built-in default**, recomputed
+every boot. It used to be the reverse, and boot *seeded* env SMTP into the row, so the row
+was never empty again and every later change to `EMAIL_SMTP_HOST` was a silent no-op. Do
+not reintroduce that seeding, and do not add a path that reads the stored row alone.
+
+- **Every runtime path must merge too, not just boot.** `PatchEmailSettings`' hot-swap and
+  `TestEmailConnection` go through `resolveEmailSettings`; the Google/Zoom PATCH handlers
+  skip their hot-reload when the env owns the app. Miss one and a save in the admin UI
+  silently captures the mailer until the next restart - the old bug, one layer down.
+- **`config.Load` must not default a field the DB also holds.** `EMAIL_SMTP_PORT`,
+  `EMAIL_FROM_ADDRESS` and `EMAIL_FROM_NAME` deliberately load as `""`; the fallbacks live
+  at the end of the merge. A default at Load is indistinguishable from an operator's value
+  and would override every stored From address on every boot.
+- **Things that only work in pairs resolve in pairs.** `GOOGLE_CLIENT_ID` carries its
+  secret; `EMAIL_SMTP_HOST`/`EMAIL_RESEND_API_KEY` carry the whole transport (host, port,
+  user, pass, TLS, key). Field-by-field would assemble half-env/half-DB credentials that
+  fail at the consent screen or the SMTP handshake, nowhere near boot. The transport
+  grouping is also what lets an env var *choose* the transport at all - `BuildMailer` picks
+  Resend whenever a key is present, so a stored key would otherwise route straight past a
+  freshly-set `EMAIL_SMTP_HOST`.
+- The override must stay **visible**: the boot log names `source=environment|database` and
+  warns when it is shadowing a stored value, and the three settings pages render
+  `env-managed-notice.svelte`. An invisible override is just the old confusion reversed.
+
 ## Event types: slot interval is not the duration
 
 `slot_interval_minutes` = how often a booking may **start**. `duration_minutes` = how long it

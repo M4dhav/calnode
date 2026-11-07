@@ -50,13 +50,16 @@ app you must `pnpm build` in `frontend/` **and** rebuild/restart the Go binary
   - `BASE_URL` — identity host (OAuth callbacks, admin UI, invites)
   - `PUBLIC_BASE_URL` — booker-facing host (booking links, emails); defaults to BASE_URL. The split lets a tenant put the team on a custom domain (`book.acme.com`) while OAuth/admin stay on the identity host (see §16).
   - `CALNODE_ENCRYPTION_KEY` (platform secret / KEK input), `CALNODE_RECOVERY_SECRET` (escrow)
-  - `SMTP_*` and `GOOGLE_CLIENT_ID/SECRET` (also settable at runtime in DB settings, which take priority)
+  - `SMTP_*`, `EMAIL_RESEND_API_KEY`, `GOOGLE_CLIENT_ID/SECRET`, `ZOOM_CLIENT_ID/SECRET`
+    (also settable at runtime in DB settings; the **env var wins**, the DB row is the
+    fallback — `handler.EnvSettings` / `MergeEmailSettings`). Email fields that the DB
+    also holds carry **no default** here, so "empty" can mean "unset" at merge time.
   - `MICROSOFT_CLIENT_ID/SECRET` and `MICROSOFT_TENANT` (default `common`; use the
     multi-tenant `common` so any work/personal Microsoft account can connect/sign in)
   - `COOKIE_SECURE` (defaults true when BASE_URL is https)
 - Startup (`internal/server/server.go: New`): open DB → run goose migrations →
-  open keyvault (unwrap DEK) → configure mailer (DB settings override env) → start
-  webhook/reminder **worker** → load Google creds (DB > env) → build one
+  open keyvault (unwrap DEK) → configure mailer (env overrides DB settings) → start
+  webhook/reminder **worker** → load Google creds (env > DB) → build one
   `calendar.Service` and **register every configured provider** (Google, Microsoft) →
   wire up the matching **OAuth login** providers (Google and/or Microsoft) → if any
   calendar is configured, **start the calendar reconciler** → register routes →

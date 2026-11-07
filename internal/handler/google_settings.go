@@ -61,7 +61,16 @@ func (h *Handler) GetGoogleSettings(w http.ResponseWriter, r *http.Request) {
 	h.writeJSON(w, http.StatusOK, map[string]any{
 		"client_id":         clientID,
 		"client_secret_set": secretEnc != "",
-		"configured":        clientID != "",
+		// Configured counts the environment too: GOOGLE_CLIENT_ID outranks this row, so an
+		// instance can be fully configured with nothing stored here at all.
+		"configured": clientID != "" || h.env.GoogleClientID != "",
+		// What the environment is overriding, if anything. The fields above stay the
+		// STORED values, which is what this page edits and what takes over if the
+		// variable is unset; this says whether editing them has any effect right now.
+		"env": map[string]any{
+			"managed":   h.env.GoogleClientID != "",
+			"client_id": h.env.GoogleClientID,
+		},
 		// base_url is the identity host the server builds OAuth redirect URIs
 		// from (see PatchGoogleSettings); the setup UI renders the exact URIs to
 		// register in Google Cloud so they always match what we send.
@@ -103,10 +112,16 @@ func (h *Handler) PatchGoogleSettings(w http.ResponseWriter, r *http.Request) {
 			h.writeError(w, http.StatusInternalServerError, "internal error")
 			return
 		}
-		h.SetCalendar(nil)
-		h.authMu.Lock()
-		h.googleAuth = nil
-		h.authMu.Unlock()
+		// Only tear down the live clients if the stored row was what they were built
+		// from. With GOOGLE_CLIENT_ID set, the environment owns the app and clearing
+		// this row only clears the fallback -- disconnecting Google here would make
+		// a save on this page break a working, environment-configured install.
+		if h.env.GoogleClientID == "" {
+			h.SetCalendar(nil)
+			h.authMu.Lock()
+			h.googleAuth = nil
+			h.authMu.Unlock()
+		}
 		h.GetGoogleSettings(w, r)
 		return
 	}
@@ -160,6 +175,18 @@ func (h *Handler) PatchGoogleSettings(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+	}
+
+	// Same rule as the clear path: the stored row is saved either way, but it must not
+	// be hot-loaded over an environment-supplied app. Boot resolves environment first
+	// (handler.EnvSettings); if this path did not, saving here would swap the running
+	// clients to the stored credentials and the override would last only until restart.
+	if h.env.GoogleClientID != "" {
+		h.logger.InfoContext(r.Context(),
+			"google settings: saved, but GOOGLE_CLIENT_ID is set so the environment app stays active",
+			"env_client_id", h.env.GoogleClientID)
+		h.GetGoogleSettings(w, r)
+		return
 	}
 
 	if resolvedSecret != "" {

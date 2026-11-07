@@ -48,6 +48,7 @@ type Handler struct {
 	stripe            *stripe.Client // nil when payments are unconfigured
 	livekitMu         sync.RWMutex
 	livekit           *livekit.Client // nil when LiveKit video is unconfigured
+	env               EnvSettings     // environment-supplied settings; outrank the server_settings row
 	demoMode          bool            // true on the public demo instance: disables calendar/Zoom connect
 	demoResetInterval time.Duration
 	demoMu            sync.RWMutex

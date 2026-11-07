@@ -994,6 +994,10 @@
 			"ai": "IA",
 			"tracking": "Suivi"
 		},
+		"envManaged": {
+			"title": "Ces paramètres proviennent de variables d'environnement",
+			"body": "{vars} est défini sur ce serveur : ce sont ces variables qui fournissent ces paramètres, et les champs ci-dessous ne servent que de valeurs de repli. L'enregistrement est autorisé et sera conservé, mais il ne change rien tant que la variable n'est pas supprimée et l'application redémarrée."
+		},
 		"profile": {
 			"loading": "Chargement…",
 			"section": {

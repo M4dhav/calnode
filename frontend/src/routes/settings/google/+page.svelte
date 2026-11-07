@@ -9,6 +9,7 @@
 	import { saveOnCmdS } from '$lib/save-shortcut';
 	import { createAsyncFlag } from '$lib/async-action.svelte';
 	import { t, tr } from '$lib/i18n';
+	import EnvManagedNotice from '$lib/components/env-managed-notice.svelte';
 	import LinkedText from '$lib/i18n/linked-text.svelte';
 
 	const loadingFlag = createAsyncFlag(true);
@@ -62,6 +63,9 @@
 	<p class="py-8 text-sm text-muted-foreground">{$t('common.loading')}</p>
 {:else}
 	<div class="max-w-lg space-y-4">
+		{#if googleSettings?.env.managed}
+			<EnvManagedNotice vars={['GOOGLE_CLIENT_ID']} value={googleSettings.env.client_id} />
+		{/if}
 
 		{#if originMismatch}
 			<div class="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">

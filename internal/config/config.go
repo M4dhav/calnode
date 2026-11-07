@@ -30,6 +30,12 @@ type Config struct {
 	SMTPStartTLS    bool // STARTTLS (port 587)
 	EmailFrom       string
 	EmailFromName   string
+	// ResendAPIKey selects HTTPS delivery via api.resend.com instead of SMTP, the same
+	// way the Settings -> Email key does. It exists so the transport can be chosen from
+	// the environment at all: without it, an operator who sets EMAIL_SMTP_HOST on a host
+	// that already has a stored Resend key would still be routed over HTTPS, and the
+	// env var they set would have no effect.
+	ResendAPIKey string
 
 	// Google OAuth (calendar + sign-in)
 	GoogleClientID     string
@@ -113,13 +119,21 @@ func Load() *Config {
 		SMTPConnectHost: getEnv("EMAIL_SMTP_CONNECT_HOST", ""),
 		SMTPConnectPort: getEnv("EMAIL_SMTP_CONNECT_PORT", ""),
 		SMTPHost:        getEnv("EMAIL_SMTP_HOST", ""),
-		SMTPPort:        getEnv("EMAIL_SMTP_PORT", "587"),
-		SMTPUser:        getEnv("EMAIL_SMTP_USER", ""),
-		SMTPPass:        getEnv("EMAIL_SMTP_PASS", ""),
-		SMTPTLS:         getBool("EMAIL_SMTP_TLS", false),
-		SMTPStartTLS:    getBool("EMAIL_SMTP_STARTTLS", false),
-		EmailFrom:       getEnv("EMAIL_FROM_ADDRESS", "bookings@localhost"),
-		EmailFromName:   getEnv("EMAIL_FROM_NAME", "Calnode"),
+		// No built-in defaults here, deliberately. These four are ALSO columns on
+		// server_settings, and handler.MergeEmailSettings has to be able to tell
+		// "the operator set this" from "nobody set it" to know whether the stored
+		// value may be used. A default baked in at Load erases that distinction --
+		// EMAIL_FROM_ADDRESS defaulting to bookings@localhost here would override
+		// every stored From address on every boot. The fallbacks now live at the
+		// end of the merge, in handler.MergeEmailSettings.
+		SMTPPort:      getEnv("EMAIL_SMTP_PORT", ""),
+		SMTPUser:      getEnv("EMAIL_SMTP_USER", ""),
+		SMTPPass:      getEnv("EMAIL_SMTP_PASS", ""),
+		SMTPTLS:       getBool("EMAIL_SMTP_TLS", false),
+		SMTPStartTLS:  getBool("EMAIL_SMTP_STARTTLS", false),
+		EmailFrom:     getEnv("EMAIL_FROM_ADDRESS", ""),
+		EmailFromName: getEnv("EMAIL_FROM_NAME", ""),
+		ResendAPIKey:  getEnv("EMAIL_RESEND_API_KEY", ""),
 
 		GoogleClientID:     getEnv("GOOGLE_CLIENT_ID", ""),
 		GoogleClientSecret: getEnv("GOOGLE_CLIENT_SECRET", ""),

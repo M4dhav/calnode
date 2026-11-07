@@ -994,6 +994,10 @@
 			"ai": "AI",
 			"tracking": "Tracking"
 		},
+		"envManaged": {
+			"title": "These settings come from environment variables",
+			"body": "{vars} is set on this server, so it supplies these settings and the fields below are only the fallback. Saving here is allowed and will persist, but it changes nothing until the variable is unset and the app is restarted."
+		},
 		"profile": {
 			"loading": "Loading…",
 			"section": {

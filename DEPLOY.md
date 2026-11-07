@@ -62,6 +62,7 @@ backup method. The email, calendar and other integration settings below still ap
 | `DATABASE_URL` | no | `sqlite://./data/calnode.db` | Point at the persistent volume, e.g. `sqlite:///data/calnode.db`. |
 | `PORT` | no | `3000` | The app listens on `$PORT`. Many platforms inject their own (Railway injects `8080`) — let them. |
 | `EMAIL_SMTP_HOST` / `_PORT` / `_USER` / `_PASS` | no¹ | — / `587` | SMTP. Can also be set later in Settings → Email (DB-stored, encrypted). |
+| `EMAIL_RESEND_API_KEY` | no¹ | — | Deliver over Resend's HTTPS API instead of SMTP — the env equivalent of the key in Settings → Email. Use it where the platform blocks outbound SMTP (§8). |
 | `EMAIL_SMTP_CONNECT_HOST` / `EMAIL_SMTP_CONNECT_PORT` | no | SMTP host / port | TCP relay address, loaded at startup. Applies to environment and database SMTP settings; TLS and authentication still use the SMTP host. |
 | `EMAIL_SMTP_TLS` / `_STARTTLS` | no | `false` | `STARTTLS` for 587, implicit `TLS` for 465. |
 | `EMAIL_FROM_ADDRESS` / `EMAIL_FROM_NAME` | no | `bookings@localhost` / `Calnode` | The From identity. |
@@ -72,7 +73,32 @@ backup method. The email, calendar and other integration settings below still ap
 | `FRAME_ANCESTORS` | no | — | **Space**-separated origins allowed to embed the **admin UI** in a frame, e.g. `https://console.example.com 'self'`. Each entry must be `https://host[:port]` or `'self'` — anything else and **the app refuses to start**, because browsers drop a policy they cannot parse. Does not affect the public booking pages, which always deny framing. ⛔ **Same-site only in practice**: `calnode_session` is `SameSite=Lax`, so a cross-site parent can frame `/admin/` and still never be sent the cookie — it gets the login screen inside the frame. Use `'self'` or a host sharing `BASE_URL`'s registrable domain. |
 | `LOG_LEVEL` | no | `info` | `debug`/`info`/`warn`/`error`. |
 
-¹ Email is optional to boot, but bookings won't send confirmations until SMTP is configured (env **or** the admin UI). Precedence is **env var > DB setting > default**.
+¹ Email is optional to boot, but bookings won't send confirmations until SMTP is configured (env **or** the admin UI).
+
+### Environment variables vs. Settings pages
+
+Three groups can be set in **either** place — email, Google OAuth, Zoom OAuth. For those,
+precedence is **env var > stored setting > built-in default**, resolved fresh on every
+boot. Set a variable, redeploy, and the value you set is the one in use; the matching
+Settings page becomes the fallback for when the variable is unset again. The boot log
+names the winner (`source=environment` / `source=database`) and warns when a variable is
+overriding something stored, and the Settings page shows a banner saying the same.
+
+A saved change on an overridden page still persists — it is the fallback, and clearing the
+variable and restarting makes it live — but it does not take effect while the variable is
+set. To hand control back to the UI: unset the variable and redeploy.
+
+Two details worth knowing:
+
+- **Credentials that only work in pairs move in pairs.** Setting `GOOGLE_CLIENT_ID`
+  without `GOOGLE_CLIENT_SECRET` gives you an app with no secret, **not** the env ID
+  paired with the stored secret — that combination would fail at Google's consent screen
+  with nothing to explain it. `ZOOM_CLIENT_ID` behaves the same way.
+- **The email transport is one group.** Setting `EMAIL_SMTP_HOST` *or*
+  `EMAIL_RESEND_API_KEY` makes the environment the sole source of host, port, user,
+  password, TLS mode and API key. That is what lets a variable choose the transport: a
+  stored Resend key would otherwise keep routing over HTTPS past the SMTP host you just
+  set. `EMAIL_FROM_ADDRESS` and `EMAIL_FROM_NAME` stand alone and fall back individually.
 
 ---
 

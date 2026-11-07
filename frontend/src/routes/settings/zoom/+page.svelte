@@ -9,6 +9,7 @@
 	import { saveOnCmdS } from '$lib/save-shortcut';
 	import { createAsyncFlag } from '$lib/async-action.svelte';
 	import { t, tr } from '$lib/i18n';
+	import EnvManagedNotice from '$lib/components/env-managed-notice.svelte';
 	import LinkedText from '$lib/i18n/linked-text.svelte';
 
 	const loadingFlag = createAsyncFlag(true);
@@ -46,6 +47,9 @@
 	<p class="py-8 text-sm text-muted-foreground">{$t('common.loading')}</p>
 {:else}
 	<div class="max-w-lg space-y-4">
+		{#if settings?.env.managed}
+			<EnvManagedNotice vars={['ZOOM_CLIENT_ID']} value={settings.env.client_id} />
+		{/if}
 
 		{#if !settings?.configured}
 		<div class="rounded-lg border bg-card p-6">

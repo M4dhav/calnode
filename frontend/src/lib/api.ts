@@ -207,22 +207,50 @@ export type EmailSettings = {
 	rsvp_tracking: boolean;
 	/** Where Resend must deliver email.received: this instance's BASE_URL + the inbound path. */
 	rsvp_webhook_url: string;
+	/** Which of the fields above the process environment is currently overriding.
+	 *  Environment variables outrank these stored settings, so a field listed here can
+	 *  still be edited (it is the fallback if the variable is ever unset) but editing it
+	 *  changes nothing while the variable is set. */
+	env: {
+		/** EMAIL_SMTP_HOST or EMAIL_RESEND_API_KEY is set, so the environment owns the
+		 *  whole transport: host, port, user, password, TLS mode and API key. */
+		transport: boolean;
+		smtp_host: string;
+		resend_api_key_set: boolean;
+		email_from: string;
+		email_from_name: string;
+	};
+};
+
+/** Set when an environment variable supplies this OAuth app, in which case it outranks
+ *  the stored credentials below and they act only as the fallback. The client ID and
+ *  secret always travel together, so an environment ID is never paired with a stored
+ *  secret from a different app. */
+export type EnvManagedApp = {
+	managed: boolean;
+	client_id: string;
 };
 
 export type GoogleSettings = {
 	client_id: string;
 	client_secret_set: boolean;
+	/** True when an app is configured from EITHER source — the environment counts. */
 	configured: boolean;
 	/** Identity host the server builds OAuth redirect URIs from. */
 	base_url: string;
+	/** Set when GOOGLE_CLIENT_ID supplies the app. */
+	env: EnvManagedApp;
 };
 
 export type ZoomSettings = {
 	client_id: string;
 	client_secret_set: boolean;
+	/** True when an app is configured from EITHER source — the environment counts. */
 	configured: boolean;
 	/** Exact redirect URI to register in the Zoom Marketplace app. */
 	redirect_uri: string;
+	/** Set when ZOOM_CLIENT_ID supplies the app. */
+	env: EnvManagedApp;
 };
 
 export type ZoomStatus = {

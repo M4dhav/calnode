@@ -156,7 +156,17 @@ func (h *Handler) GetEmailSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	// Report the transport the same way BuildMailer decides it, so the UI cannot claim one
 	// path while another is delivering. Secrets are never returned, only whether they exist.
-	_, transport := BuildMailer(SMTPConfig{Host: host, ResendAPIKey: resendEnc})
+	//
+	// Resolved, not read straight off the row: when the environment supplies the transport
+	// it is the environment that delivers, and a page reporting "smtp" because the row says
+	// so while Resend is actually sending would be the same class of lie the old precedence
+	// told. The form fields below stay the STORED values -- they are what this page edits,
+	// and what takes over if the variables are ever unset -- with "env" saying which of
+	// them are currently overridden.
+	transport := TransportNone
+	if cfg := h.resolveEmailSettings(r.Context()); cfg != nil {
+		_, transport = BuildMailer(*cfg)
+	}
 	h.writeJSON(w, http.StatusOK, map[string]any{
 		"smtp_host":          host,
 		"smtp_port":          port,
@@ -175,6 +185,15 @@ func (h *Handler) GetEmailSettings(w http.ResponseWriter, r *http.Request) {
 		"resend_webhook_secret_set": webhookSecretEnc != "",
 		"rsvp_tracking":             rsvpAddr != "" && webhookSecretEnc != "" && resendEnc != "",
 		"rsvp_webhook_url":          h.rsvpWebhookURL(),
+		// Which of the fields above the environment is currently overriding, so the page
+		// can say so instead of letting an admin edit a value that has no effect.
+		"env": map[string]any{
+			"transport":          h.env.EmailTransportFromEnv(),
+			"smtp_host":          h.env.SMTPHost,
+			"resend_api_key_set": h.env.ResendAPIKey != "",
+			"email_from":         h.env.EmailFrom,
+			"email_from_name":    h.env.EmailFromName,
+		},
 	})
 }
 
@@ -372,16 +391,16 @@ func (h *Handler) PatchEmailSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Hot-swap the live mailer so changes take effect immediately. Re-read from the DB
-	// rather than rebuilding from the request: the request may legitimately omit secrets,
-	// and this way the running mailer always matches what was actually persisted.
+	// Hot-swap the live mailer so changes take effect immediately. Re-read rather than
+	// rebuilding from the request: the request may legitimately omit secrets, and this way
+	// the running mailer always matches what was actually persisted.
+	//
+	// Through resolveEmailSettings, not the stored row alone -- boot resolves the
+	// environment over the database, and if this path did not, saving anything on the
+	// settings page would quietly swap the mailer to the stored values and undo the
+	// override until the next restart.
 	if h.live != nil {
-		cfg, err := LoadEmailSettingsFromDB(h.db, h.encKey)
-		if err != nil {
-			h.logger.ErrorContext(r.Context(), "email settings: reload after save", "error", err)
-			h.writeError(w, http.StatusInternalServerError, "internal error")
-			return
-		}
+		cfg := h.resolveEmailSettings(r.Context())
 		if cfg == nil {
 			h.live.Swap(&mailer.Noop{})
 		} else {
@@ -464,7 +483,7 @@ func (h *Handler) TestEmailConnection(w http.ResponseWriter, r *http.Request) {
 	// actually in use. Best-effort: if this read fails the send is still attempted, and the
 	// message just falls back to the SMTP-flavoured advice.
 	transport := TransportSMTP
-	if cfg, cfgErr := LoadEmailSettingsFromDB(h.db, h.encKey); cfgErr == nil && cfg != nil {
+	if cfg := h.resolveEmailSettings(ctx); cfg != nil {
 		_, transport = BuildMailer(*cfg)
 	}
 

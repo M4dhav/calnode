@@ -67,17 +67,29 @@ func TestSMTPRelayAtBootAndSettingsReload(t *testing.T) {
 					t.Fatalf("settings: %d %s", rec.Code, rec.Body)
 				}
 			}
+			cfg := &config.Config{
+				BaseURL: "https://calnode.localhost", DataDir: t.TempDir(),
+				SMTPConnectHost: host, SMTPConnectPort: port,
+			}
+			// The two sources the relay has to apply to. They are set up differently
+			// because the environment outranks the stored row (handler.EnvSettings):
+			// naming EMAIL_SMTP_HOST here as well would put the environment in charge
+			// of both cases and the stored one would never be exercised.
+			wantHosts := []string{"smtp.example.com"}
 			if stored {
 				patch(seed, "smtp.example.com")
+				// Nothing in the environment names a transport, so the stored row is in
+				// charge and a settings save moves the active host. That second entry is
+				// the settings-reload half of this test.
+				wantHosts = append(wantHosts, "updated.example.com")
+			} else {
+				cfg.SMTPHost, cfg.SMTPPort, cfg.SMTPTLS = "smtp.example.com", "465", true
+				cfg.EmailFrom = "from@example.com"
 			}
 			ctx, cancel := context.WithCancel(t.Context())
-			h, drain := BuildHandler(ctx, &config.Config{
-				BaseURL: "https://calnode.localhost", DataDir: t.TempDir(),
-				SMTPHost: "smtp.example.com", SMTPPort: "465", SMTPTLS: true,
-				EmailFrom: "from@example.com", SMTPConnectHost: host, SMTPConnectPort: port,
-			}, database, logger)
+			h, drain := BuildHandler(ctx, cfg, database, logger)
 			defer func() { cancel(); drain() }()
-			for _, smtpHost := range []string{"smtp.example.com", "updated.example.com"} {
+			for _, smtpHost := range wantHosts {
 				if smtpHost == "updated.example.com" {
 					patch(h, smtpHost)
 				}

@@ -63,7 +63,16 @@ func (h *Handler) GetZoomSettings(w http.ResponseWriter, r *http.Request) {
 	h.writeJSON(w, http.StatusOK, map[string]any{
 		"client_id":         clientID,
 		"client_secret_set": secretEnc != "",
-		"configured":        clientID != "",
+		// Configured counts the environment too: ZOOM_CLIENT_ID outranks this row, so an
+		// instance can be fully configured with nothing stored here at all.
+		"configured": clientID != "" || h.env.ZoomClientID != "",
+		// What the environment is overriding, if anything. The fields above stay the
+		// STORED values, which is what this page edits and what takes over if the
+		// variable is unset; this says whether editing them has any effect right now.
+		"env": map[string]any{
+			"managed":   h.env.ZoomClientID != "",
+			"client_id": h.env.ZoomClientID,
+		},
 		// The exact Redirect URL + scopes to register in the Zoom Marketplace app, so
 		// the setup UI shows values that always match what we send.
 		"redirect_uri": h.zoomRedirectURI(),
@@ -102,7 +111,12 @@ func (h *Handler) PatchZoomSettings(w http.ResponseWriter, r *http.Request) {
 			h.writeError(w, http.StatusInternalServerError, "internal error")
 			return
 		}
-		h.SetZoom(nil)
+		// With ZOOM_CLIENT_ID set the environment owns the app, and this row is only
+		// the fallback; disconnecting the live client here would break a working
+		// environment-configured install from a page that cannot control it.
+		if h.env.ZoomClientID == "" {
+			h.SetZoom(nil)
+		}
 		h.GetZoomSettings(w, r)
 		return
 	}
@@ -155,6 +169,16 @@ func (h *Handler) PatchZoomSettings(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
+	}
+
+	// The stored row is saved either way, but must not be hot-loaded over an
+	// environment-supplied app; see the matching guard in PatchGoogleSettings.
+	if h.env.ZoomClientID != "" {
+		h.logger.InfoContext(r.Context(),
+			"zoom settings: saved, but ZOOM_CLIENT_ID is set so the environment app stays active",
+			"env_client_id", h.env.ZoomClientID)
+		h.GetZoomSettings(w, r)
+		return
 	}
 
 	if resolvedSecret != "" {
